@@ -65,10 +65,3 @@ Tavily
 
 ------------------------------------------------------------------------
 
-## 📎 Author
-
-Built as part of a RAG & Multimodal AI Developer Assessment.
-
-------------------------------------------------------------------------
-
-**Status:** Submission Ready
