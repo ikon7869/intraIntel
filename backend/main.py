@@ -1,5 +1,4 @@
-# rag_agent_app/backend/main.py
-
+import json
 import os
 import time
 from typing import List, Dict, Any
@@ -37,7 +36,7 @@ class TraceEvent(BaseModel):
 class QueryRequest(BaseModel):
     session_id: str
     query: str
-    enable_web_search: bool = True # NEW: Add web search toggle state
+    restricted_mode: bool = False 
 
 class AgentResponse(BaseModel):
     response: str
@@ -64,8 +63,6 @@ async def upload_document(file: UploadFile = File(...)):
         file_content = await file.read()
         tmp_file.write(file_content)
         temp_file_path = tmp_file.name
-    
-    print(f"Received PDF for upload: {file.filename}. Saved temporarily to {temp_file_path}")
 
     try:
         loader = PyPDFLoader(temp_file_path)
@@ -73,8 +70,7 @@ async def upload_document(file: UploadFile = File(...)):
 
         total_chunks_added = 0
         if documents:
-            full_text_content = "\n\n".join([doc.page_content for doc in documents])
-            add_document_to_vectorstore(full_text_content)
+            add_document_to_vectorstore(documents, filename=file.filename)
             total_chunks_added = len(documents)
         
         return DocumentUploadResponse(
@@ -99,13 +95,13 @@ async def upload_document(file: UploadFile = File(...)):
 @app.post("/chat/", response_model=AgentResponse)
 async def chat_with_agent(request: QueryRequest):
     trace_events_for_frontend: List[TraceEvent] = []
-    
+    print(json.dumps(request.dict(), indent=2))  
     try:
-        # Pass enable_web_search into the config for the agent to access
+
         config = {
             "configurable": {
                 "thread_id": request.session_id,
-                "web_search_enabled": request.enable_web_search
+                "restricted_mode": request.restricted_mode
             }
         }
         inputs = {"messages": [HumanMessage(content=request.query)]}
@@ -113,7 +109,7 @@ async def chat_with_agent(request: QueryRequest):
         final_message = ""
         
         print(f"--- Starting Agent Stream for session {request.session_id} ---")
-        print(f"Web Search Enabled: {request.enable_web_search}") # For server-side debugging
+        print(f"Restricted Mode Enabled: {request.restricted_mode}")
 
         for i, s in enumerate(rag_agent.stream(inputs, config=config)):
             current_node_name = None
@@ -132,7 +128,6 @@ async def chat_with_agent(request: QueryRequest):
 
             if current_node_name == "router":
                 route_decision = node_output_state.get('route')
-                # Check for overridden route if web search was disabled
                 initial_decision = node_output_state.get('initial_router_decision', route_decision)
                 override_reason = node_output_state.get('router_override_reason', None)
 
@@ -143,27 +138,80 @@ async def chat_with_agent(request: QueryRequest):
                     event_description = f"Router decided: '{route_decision}'"
                     event_details = {"decision": route_decision, "reason": "Based on initial query analysis."}
                 event_type = "router_decision"
+
             elif current_node_name == "rag_lookup":
-                rag_content_summary = node_output_state.get("rag", "")[:200] + "..."
-                
-                rag_sufficient = node_output_state.get("route") == "answer" 
-                
-                if rag_sufficient:
-                    event_description = f"RAG Lookup performed. Content found and deemed sufficient. Proceeding to answer."
-                    event_details = {"retrieved_content_summary": rag_content_summary, "sufficiency_verdict": "Sufficient"}
+
+                rag_chunks = node_output_state.get("rag_chunks", [])
+                num_chunks = len(rag_chunks)
+
+                if num_chunks == 0:
+                    event_description = "RAG lookup performed. No relevant document chunks found."
+                    event_details = {"num_chunks": 0}
+
                 else:
-                    event_description = f"RAG Lookup performed. Content NOT sufficient. Diverting to web search."
-                    event_details = {"retrieved_content_summary": rag_content_summary, "sufficiency_verdict": "Not Sufficient"}
-                
+
+                    preview_chunks = []
+
+                    for chunk in rag_chunks[:3]:
+                        lines = chunk.split("\n")
+                        header = lines[0] 
+                        content_preview = lines[1][:350] + "..." if len(lines) > 1 else ""
+
+                        preview_chunks.append(f"{header}\n{content_preview}")
+
+                    formatted_sources = "\n\n".join(preview_chunks)
+
+                    event_description = f"RAG lookup retrieved {num_chunks} document chunks."
+                    event_details = {
+                        "num_chunks": num_chunks,
+                        "preview_sources": formatted_sources
+                    }
+
                 event_type = "rag_action"
+
+
             elif current_node_name == "web_search":
-                web_content_summary = node_output_state.get("web", "")[:200] + "..."
-                event_description = f"Web Search performed. Results retrieved. Proceeding to answer."
-                event_details = {"retrieved_content_summary": web_content_summary}
+
+                restricted_mode = request.restricted_mode
+                web_results = node_output_state.get("web", [])
+                web_count = len(web_results)
+
+                if restricted_mode:
+                    event_description = "Web search skipped due to Restricted Mode."
+                    event_details = {
+                        "reason": "Restricted mode prohibits external data access."
+                    }
+
+                elif web_count == 0:
+                    event_description = "Web search performed but no relevant results found."
+                    event_details = {"num_results": 0}
+
+                else:
+                    preview_web = []
+
+                    for web in web_results[:3]:
+                        lines = web.split("\n")
+                        header = lines[0] 
+                        content_preview = lines[1][:300] + "..." if len(lines) > 1 else ""
+
+                        preview_web.append(f"{header}\n{content_preview}")
+
+                    formatted_web_sources = "\n\n".join(preview_web)
+
+                    event_description = f"Web search retrieved {web_count} results."
+                    event_details = {
+                        "num_results": web_count,
+                        "preview_sources": formatted_web_sources
+                    }
+
                 event_type = "web_action"
-            elif current_node_name == "answer":
-                event_description = "Generating final answer using gathered context."
+
+            
+            elif current_node_name == "fusion_answer":
+
+                event_description = "Generating final answer using hybrid context with source citations and confidence scoring."
                 event_type = "answer_generation"
+
             elif current_node_name == "__end__":
                 event_description = "Agent process completed."
                 event_type = "process_end"
@@ -179,7 +227,7 @@ async def chat_with_agent(request: QueryRequest):
             )
             print(f"Streamed Event: Step {i+1} - Node: {current_node_name} - Desc: {event_description}")
 
-        # Get the final state from the last yielded item in the stream
+
         final_actual_state_dict = None
         if s:
             if '__end__' in s:

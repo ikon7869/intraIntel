@@ -1,12 +1,10 @@
-# rag_agent_app/frontend/ui_components.py
-
 import streamlit as st
 from backend_api import upload_document_to_backend, chat_with_backend_agent
-from session_manager import init_session_state # Import to access session state
+from session_manager import init_session_state 
 
 def display_header():
     """Renders the main title and introductory markdown."""
-    st.set_page_config(page_title="AI Agent Chatbot", layout="wide") # Set page config here
+    st.set_page_config(page_title="AI Agent Chatbot", layout="wide") 
     st.title("🤖 AI Agent Chatbot")
     st.markdown("Ask me anything! I can answer questions using my internal knowledge (RAG) or by searching the web.")
     st.markdown("---")
@@ -38,12 +36,10 @@ def render_agent_settings_section():
     Updates the 'web_search_enabled' flag in session state.
     """
     st.header("Agent Settings")
-    # Checkbox to enable/disable web search, linked to session state
-    # The value is directly updated in st.session_state.web_search_enabled
-    st.session_state.web_search_enabled = st.checkbox(
-        "Enable Web Search (🌐)", 
-        value=st.session_state.web_search_enabled,
-        help="If enabled, the agent can use web search when its knowledge base is insufficient. If disabled, it will only use uploaded documents."
+    st.session_state.restricted_mode = st.checkbox(
+        "Restrict Model", 
+        value=False,
+        help="When enabled, the agent will be restricted to using only its internal knowledge base (RAG) and will not perform web searches."
     )
     st.markdown("---")
 

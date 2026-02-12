@@ -1,6 +1,5 @@
-# rag_agent_app/frontend/app.py
-
 import streamlit as st
+import requests
 from config import FRONTEND_CONFIG
 from session_manager import init_session_state
 from ui_components import (
@@ -14,14 +13,11 @@ from backend_api import chat_with_backend_agent
 
 def main():
     """Main function to run the Streamlit application."""
-    
-    # Initialize session state variables
+
     init_session_state()
 
-    # Get FastAPI base URL from config
     fastapi_base_url = FRONTEND_CONFIG["FASTAPI_BASE_URL"]
 
-    # Render UI sections
     display_header()
     render_document_upload_section(fastapi_base_url)
     render_agent_settings_section()
@@ -29,31 +25,24 @@ def main():
     st.header("Chat with the Agent")
     display_chat_history()
 
-    # User input field
     if prompt := st.chat_input("Your message"):
-        # Add user's message to chat history and display immediately
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Display assistant's response and trace
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
-                    # Call the backend API for chat
                     agent_response, trace_events = chat_with_backend_agent(
                         fastapi_base_url,
                         st.session_state.session_id,
                         prompt,
-                        st.session_state.web_search_enabled
+                        st.session_state.restricted_mode
                     )
                     
-                    # Display the agent's final response
                     st.markdown(agent_response)
-                    # Add the agent's response to chat history
                     st.session_state.messages.append({"role": "assistant", "content": agent_response})
 
-                    # Display the workflow trace
                     display_trace_events(trace_events)
                     
                 except requests.exceptions.ConnectionError:
